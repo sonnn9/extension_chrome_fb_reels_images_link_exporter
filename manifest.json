@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Facebook Reels Link Exporter",
-  "version": "1.0.0",
-  "description": "Tự động cuộn trang Reels Facebook, thu thập toàn bộ link reel và xuất ra CSV.",
+  "name": "Facebook Reels & Photos Link Exporter",
+  "version": "1.1.0",
+  "description": "Tự động cuộn trang Facebook (Reels hoặc Photos), thu thập link reel/ảnh và xuất ra CSV.",
   "permissions": [
     "storage",
     "downloads",

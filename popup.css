@@ -30,12 +30,14 @@ label {
 label span {
   font-weight: 600;
 }
-input[type="number"] {
+input[type="number"],
+select {
   width: 100%;
   padding: 8px 10px;
   border: 1px solid #d1d5db;
   border-radius: 8px;
   background: #fff;
+  font-size: 13px;
 }
 .checkbox-row {
   display: flex;

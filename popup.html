@@ -3,15 +3,23 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>FB Reels Exporter</title>
+  <title>FB Reels &amp; Photos Exporter</title>
   <link rel="stylesheet" href="popup.css" />
 </head>
 <body>
   <div class="wrap">
-    <h1>Facebook Reels Exporter</h1>
-    <p class="sub">Tự cuộn trang, gom toàn bộ link reel và xuất CSV.</p>
+    <h1>Facebook Reels &amp; Photos Exporter</h1>
+    <p class="sub">Tự cuộn trang, gom link reel hoặc ảnh và xuất CSV.</p>
 
     <div class="grid">
+      <label>
+        <span>Chế độ thu thập</span>
+        <select id="mode">
+          <option value="auto" selected>Tự động (theo URL)</option>
+          <option value="reels">Reels (video)</option>
+          <option value="images">Ảnh (photos)</option>
+        </select>
+      </label>
       <label>
         <span>Delay mỗi lần cuộn (ms)</span>
         <input id="delayMs" type="number" min="500" step="100" value="1800" />

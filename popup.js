@@ -1,4 +1,5 @@
 const el = {
+  mode: document.getElementById('mode'),
   delayMs: document.getElementById('delayMs'),
   maxScrolls: document.getElementById('maxScrolls'),
   idleRounds: document.getElementById('idleRounds'),
@@ -30,30 +31,35 @@ function csvEscape(value) {
 }
 
 function toCsv(rows) {
-  const headers = ['index', 'reel_url', 'reel_id', 'label', 'collected_from', 'collected_at'];
+  const headers = ['index', 'item_url', 'item_id', 'type', 'label', 'image_url', 'collected_from', 'collected_at'];
   const lines = [headers.map(csvEscape).join(',')];
   rows.forEach((row, index) => {
     lines.push([
       index + 1,
-      row.reel_url,
-      row.reel_id,
-      row.label,
-      row.collected_from,
-      row.collected_at
+      row.item_url ?? row.reel_url ?? '',
+      row.item_id ?? row.reel_id ?? '',
+      row.type ?? 'reel',
+      row.label ?? '',
+      row.image_url ?? '',
+      row.collected_from ?? '',
+      row.collected_at ?? ''
     ].map(csvEscape).join(','));
   });
-  return '\ufeff' + lines.join('\n');
+  return '﻿' + lines.join('\n');
 }
 
-function filenameFromUrl(url) {
+function filenameFromUrl(url, mode) {
+  const prefix = mode === 'images' ? 'fb-photos' : 'fb-reels';
   try {
     const parsed = new URL(url);
     const path = parsed.pathname.replace(/\/+$/, '');
-    const last = path.split('/').filter(Boolean).pop() || 'facebook_reels';
+    let last = path.split('/').filter(Boolean).pop() || '';
+    if (!last && parsed.searchParams.get('id')) last = `id-${parsed.searchParams.get('id')}`;
+    if (!last) last = 'facebook';
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-    return `fb-reels-${last}-${stamp}.csv`;
+    return `${prefix}-${last}-${stamp}.csv`;
   } catch {
-    return `fb-reels-${Date.now()}.csv`;
+    return `${prefix}-${Date.now()}.csv`;
   }
 }
 
@@ -68,18 +74,42 @@ async function sendToActiveTab(message) {
   return chrome.tabs.sendMessage(tab.id, message);
 }
 
+function modeLabel(mode) {
+  if (mode === 'images') return 'Ảnh';
+  if (mode === 'reels') return 'Reels';
+  return mode || '-';
+}
+
 function renderStatus(status) {
   el.pageUrl.textContent = status?.url || '-';
   const stateText = status?.scanning ? 'Đang quét' : 'Đang chờ';
-  const pageFlag = status?.isReelsPage ? 'Đúng trang reels' : 'Không phải trang reels';
-  el.scanState.textContent = `${stateText} • ${pageFlag}`;
+  const resolved = status?.resolvedMode || 'reels';
+  const matchFlag = status?.isMatchingPage
+    ? `Đúng trang ${modeLabel(resolved)}`
+    : `Không phải trang ${modeLabel(resolved)}`;
+  el.scanState.textContent = `${stateText} • ${matchFlag}`;
   el.foundCount.textContent = String(status?.foundCount || 0);
   el.scrollCount.textContent = String(status?.scrollCount || 0);
   el.lastAddedAt.textContent = status?.lastAddedAt || '-';
-  const previewLines = (status?.preview || []).map((item, idx) => `${idx + 1}. ${item.reel_url}`);
+  const previewLines = (status?.preview || []).map((item, idx) => {
+    const url = item.item_url || item.reel_url || '';
+    return `${idx + 1}. ${url}`;
+  });
   el.preview.value = previewLines.join('\n');
   el.exportBtn.disabled = (status?.foundCount || 0) === 0;
   el.copyBtn.disabled = (status?.foundCount || 0) === 0;
+}
+
+function hintForMode(status) {
+  const resolved = status?.resolvedMode || 'reels';
+  if (resolved === 'images') {
+    return status?.isMatchingPage
+      ? 'Sẵn sàng quét ảnh. Bấm Bắt đầu quét.'
+      : 'Hãy mở trang ảnh, ví dụ: https://www.facebook.com/profile.php?id=...&sk=photos hoặc https://www.facebook.com/USER/photos';
+  }
+  return status?.isMatchingPage
+    ? 'Sẵn sàng quét reels. Bấm Bắt đầu quét.'
+    : 'Hãy mở trang reels, ví dụ: https://www.facebook.com/USER/reels/';
 }
 
 async function refreshStatus(silent = false) {
@@ -87,11 +117,7 @@ async function refreshStatus(silent = false) {
     const response = await sendToActiveTab({ type: 'FB_REEL_EXPORTER_STATUS' });
     if (!response?.ok) throw new Error(response?.message || 'Không lấy được trạng thái.');
     renderStatus(response.status);
-    if (!silent) {
-      setHint(response.status?.isReelsPage
-        ? 'Sẵn sàng quét. Mở đúng tab Facebook /reels rồi bấm Bắt đầu quét.'
-        : 'Hãy mở đúng trang Facebook reels, ví dụ: https://www.facebook.com/TEN_TRANG/reels/');
-    }
+    if (!silent) setHint(hintForMode(response.status));
   } catch (error) {
     renderStatus(null);
     setHint(error.message || String(error), true);
@@ -101,6 +127,7 @@ async function refreshStatus(silent = false) {
 async function startScan() {
   try {
     const config = {
+      mode: el.mode.value || 'auto',
       delayMs: Number(el.delayMs.value || 1800),
       maxScrolls: Number(el.maxScrolls.value || 200),
       idleRounds: Number(el.idleRounds.value || 4),
@@ -140,9 +167,10 @@ async function exportCsv() {
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const blobUrl = URL.createObjectURL(blob);
 
+    const mode = statusResponse?.status?.resolvedMode || 'reels';
     await chrome.downloads.download({
       url: blobUrl,
-      filename: filenameFromUrl(statusResponse?.status?.url || 'facebook_reels'),
+      filename: filenameFromUrl(statusResponse?.status?.url || 'facebook', mode),
       saveAs: true
     });
 
@@ -157,7 +185,7 @@ async function copyAllLinks() {
   try {
     const resultsResponse = await sendToActiveTab({ type: 'FB_REEL_EXPORTER_RESULTS' });
     const rows = resultsResponse?.results || [];
-    const text = rows.map((row) => row.reel_url).join('\n');
+    const text = rows.map((row) => row.item_url || row.reel_url || '').filter(Boolean).join('\n');
     if (!text) {
       setHint('Chưa có link để copy.', true);
       return;
@@ -191,6 +219,7 @@ el.stopBtn.addEventListener('click', stopScan);
 el.refreshBtn.addEventListener('click', () => refreshStatus());
 el.exportBtn.addEventListener('click', exportCsv);
 el.copyBtn.addEventListener('click', copyAllLinks);
+el.mode.addEventListener('change', () => refreshStatus());
 
 document.addEventListener('DOMContentLoaded', async () => {
   el.exportBtn.disabled = true;

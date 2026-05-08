@@ -10,7 +10,9 @@
     startedAt: null,
     finishedAt: null,
     lastAddedAt: null,
+    resolvedMode: "reels",
     config: {
+      mode: "auto",
       delayMs: 1800,
       maxScrolls: 200,
       idleRounds: 4,
@@ -20,7 +22,55 @@
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-  function isFacebookReelsPage() {
+  function detectModeFromUrl(href = location.href) {
+    try {
+      const url = new URL(href);
+      const sk = (url.searchParams.get("sk") || "").toLowerCase();
+      const path = url.pathname.toLowerCase();
+
+      if (
+        sk === "photos" ||
+        sk === "photos_albums" ||
+        sk === "photos_of" ||
+        sk === "photos_by" ||
+        /\/photos(_of|_albums|_by)?\b/.test(path) ||
+        /\/photo(\.php)?\b/.test(path) ||
+        /\/media\/set\b/.test(path)
+      ) {
+        return "images";
+      }
+
+      if (
+        sk === "reels" ||
+        /\/reels?\b/.test(path) ||
+        /\/videos\b/.test(path) ||
+        /\/share\/r\b/.test(path)
+      ) {
+        return "reels";
+      }
+    } catch {}
+    return "reels";
+  }
+
+  function effectiveMode() {
+    return state.config.mode === "auto" ? detectModeFromUrl() : state.config.mode;
+  }
+
+  function isMatchingPage() {
+    const mode = effectiveMode();
+    if (mode === "images") {
+      const url = new URL(location.href);
+      const sk = (url.searchParams.get("sk") || "").toLowerCase();
+      return (
+        sk === "photos" ||
+        sk === "photos_albums" ||
+        sk === "photos_of" ||
+        sk === "photos_by" ||
+        /\/photos\b/i.test(url.pathname) ||
+        /\/photo(\.php)?\b/i.test(url.pathname) ||
+        /\/media\/set\b/i.test(url.pathname)
+      );
+    }
     return /facebook\.com\/.+\/reels\/?/i.test(location.href) || /facebook\.com\/reel\//i.test(location.href);
   }
 
@@ -37,7 +87,7 @@
     return "";
   }
 
-  function normalizeFacebookUrl(rawHref) {
+  function normalizeReelUrl(rawHref) {
     try {
       const url = new URL(rawHref, location.origin);
       if (!/facebook\.com$/i.test(url.hostname.replace(/^www\./i, ""))) return null;
@@ -51,11 +101,51 @@
 
       if (!looksLikeReel) return null;
 
-      // Drop tracking parameters/hash for cleaner CSV output.
       url.search = "";
       url.hash = "";
       url.pathname = path || "/";
       return url.toString();
+    } catch {
+      return null;
+    }
+  }
+
+  function photoIdFromUrl(url) {
+    const fbid = url.searchParams.get("fbid");
+    if (fbid && /^\d{6,}$/.test(fbid)) return fbid;
+
+    const path = url.pathname;
+    let m = path.match(/\/photos\/(?:[^/]+\/)*?(\d{8,})(?:\/|$)/i);
+    if (m) return m[1];
+
+    m = path.match(/\/photo\/?(?:\.php)?\/(\d{8,})/i);
+    if (m) return m[1];
+
+    return "";
+  }
+
+  function normalizeImageUrl(rawHref) {
+    try {
+      const url = new URL(rawHref, location.origin);
+      if (!/facebook\.com$/i.test(url.hostname.replace(/^www\./i, ""))) return null;
+
+      const path = url.pathname.toLowerCase();
+      const looksLikePhoto =
+        /^\/photo\.php$/.test(path) ||
+        /^\/photo\/?$/.test(path) ||
+        /\/photos\//.test(path) ||
+        /\/media\/set\//.test(path);
+
+      if (!looksLikePhoto) return null;
+
+      const id = photoIdFromUrl(url);
+      if (!id) return null;
+
+      const normalized = new URL("/photo/", url.origin);
+      normalized.searchParams.set("fbid", id);
+      const set = url.searchParams.get("set");
+      if (set) normalized.searchParams.set("set", set);
+      return normalized.toString();
     } catch {
       return null;
     }
@@ -85,20 +175,31 @@
     return "";
   }
 
-  function collectLinks() {
+  function extractImageSrc(anchor) {
+    const img = anchor.querySelector("img");
+    if (!img) return "";
+    const src = img.currentSrc || img.src || img.getAttribute("data-src") || "";
+    if (!src) return "";
+    if (src.startsWith("data:")) return "";
+    return src;
+  }
+
+  function collectReelLinks() {
     const anchors = Array.from(document.querySelectorAll('a[href]'));
     let newCount = 0;
 
     for (const anchor of anchors) {
-      const normalized = normalizeFacebookUrl(anchor.href);
+      const normalized = normalizeReelUrl(anchor.href);
       if (!normalized) continue;
 
       if (!state.results.has(normalized)) {
         const url = new URL(normalized);
         state.results.set(normalized, {
-          reel_url: normalized,
-          reel_id: reelIdFromPath(url.pathname),
+          item_url: normalized,
+          item_id: reelIdFromPath(url.pathname),
+          type: "reel",
           label: guessLabel(anchor),
+          image_url: "",
           collected_from: location.href,
           collected_at: new Date().toISOString()
         });
@@ -110,6 +211,42 @@
     return newCount;
   }
 
+  function collectImageLinks() {
+    const anchors = Array.from(document.querySelectorAll('a[href]'));
+    let newCount = 0;
+
+    for (const anchor of anchors) {
+      const normalized = normalizeImageUrl(anchor.href);
+      if (!normalized) continue;
+
+      const existing = state.results.get(normalized);
+      const imageSrc = extractImageSrc(anchor);
+
+      if (!existing) {
+        const url = new URL(normalized);
+        state.results.set(normalized, {
+          item_url: normalized,
+          item_id: url.searchParams.get("fbid") || "",
+          type: "image",
+          label: guessLabel(anchor),
+          image_url: imageSrc,
+          collected_from: location.href,
+          collected_at: new Date().toISOString()
+        });
+        newCount += 1;
+        state.lastAddedAt = new Date().toISOString();
+      } else if (!existing.image_url && imageSrc) {
+        existing.image_url = imageSrc;
+      }
+    }
+
+    return newCount;
+  }
+
+  function collectLinks() {
+    return state.resolvedMode === "images" ? collectImageLinks() : collectReelLinks();
+  }
+
   async function autoScan(config = {}) {
     if (state.scanning) {
       return { ok: false, message: "Đang quét rồi." };
@@ -118,11 +255,14 @@
     state.config = {
       ...state.config,
       ...config,
+      mode: config.mode || state.config.mode || "auto",
       delayMs: Number(config.delayMs || state.config.delayMs),
       maxScrolls: Number(config.maxScrolls || state.config.maxScrolls),
       idleRounds: Number(config.idleRounds || state.config.idleRounds),
       clearPrevious: config.clearPrevious !== false
     };
+
+    state.resolvedMode = effectiveMode();
 
     if (state.config.clearPrevious) {
       state.results.clear();
@@ -138,7 +278,6 @@
     let idleRounds = 0;
     let previousHeight = 0;
 
-    // Initial collect before scrolling.
     const initialNew = collectLinks();
     if (initialNew === 0) {
       await sleep(800);
@@ -162,7 +301,6 @@
 
         await sleep(state.config.delayMs);
 
-        // Nudge once more in case Facebook lazy-loads a bit later.
         window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "auto" });
         await sleep(Math.max(300, Math.round(state.config.delayMs * 0.35)));
 
@@ -180,7 +318,6 @@
           document.body?.scrollHeight || 0
         );
 
-        // If height no longer grows and no new links appear for several rounds, stop.
         if (idleRounds >= state.config.idleRounds && newHeight <= previousHeight + 8) {
           break;
         }
@@ -200,9 +337,15 @@
   }
 
   function getStatus() {
+    const resolved = state.scanning ? state.resolvedMode : effectiveMode();
     return {
       url: location.href,
-      isReelsPage: isFacebookReelsPage(),
+      mode: state.config.mode,
+      resolvedMode: resolved,
+      isMatchingPage: isMatchingPage(),
+      isReelsPage: resolved === "reels"
+        ? (/facebook\.com\/.+\/reels\/?/i.test(location.href) || /facebook\.com\/reel\//i.test(location.href))
+        : false,
       scanning: state.scanning,
       stopRequested: state.stopRequested,
       foundCount: state.results.size,
@@ -229,7 +372,7 @@
 
     if (message.type === "FB_REEL_EXPORTER_START") {
       autoScan(message.config).catch((error) => {
-        console.error("FB reel exporter scan failed:", error);
+        console.error("FB exporter scan failed:", error);
       });
       sendResponse({ ok: true, message: "Đã bắt đầu quét." });
       return false;
