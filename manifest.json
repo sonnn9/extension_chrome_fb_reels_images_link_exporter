@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "Facebook Reels Link Exporter",
+  "version": "1.0.0",
+  "description": "Tự động cuộn trang Reels Facebook, thu thập toàn bộ link reel và xuất ra CSV.",
+  "permissions": [
+    "storage",
+    "downloads",
+    "tabs",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "https://www.facebook.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://www.facebook.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "Facebook Reels Link Exporter",
+    "default_popup": "popup.html"
+  }
+}

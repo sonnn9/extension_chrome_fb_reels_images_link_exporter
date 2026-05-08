@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FB Reels Exporter</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <div class="wrap">
+    <h1>Facebook Reels Exporter</h1>
+    <p class="sub">Tự cuộn trang, gom toàn bộ link reel và xuất CSV.</p>
+
+    <div class="grid">
+      <label>
+        <span>Delay mỗi lần cuộn (ms)</span>
+        <input id="delayMs" type="number" min="500" step="100" value="1800" />
+      </label>
+      <label>
+        <span>Số lần cuộn tối đa</span>
+        <input id="maxScrolls" type="number" min="1" step="1" value="200" />
+      </label>
+      <label>
+        <span>Dừng sau N lần không có link mới</span>
+        <input id="idleRounds" type="number" min="1" step="1" value="4" />
+      </label>
+      <label class="checkbox-row">
+        <input id="clearPrevious" type="checkbox" checked />
+        <span>Xóa kết quả cũ trước khi quét</span>
+      </label>
+    </div>
+
+    <div class="actions">
+      <button id="startBtn" class="primary">Bắt đầu quét</button>
+      <button id="stopBtn">Dừng</button>
+      <button id="refreshBtn">Làm mới</button>
+    </div>
+
+    <div class="actions secondary-actions">
+      <button id="exportBtn">Xuất CSV</button>
+      <button id="copyBtn">Copy toàn bộ link</button>
+    </div>
+
+    <div id="hint" class="hint"></div>
+
+    <div class="status-card">
+      <div><strong>Trang:</strong> <span id="pageUrl">-</span></div>
+      <div><strong>Trạng thái:</strong> <span id="scanState">-</span></div>
+      <div><strong>Số link:</strong> <span id="foundCount">0</span></div>
+      <div><strong>Số lần cuộn:</strong> <span id="scrollCount">0</span></div>
+      <div><strong>Lần thêm mới gần nhất:</strong> <span id="lastAddedAt">-</span></div>
+    </div>
+
+    <div>
+      <strong>Xem trước</strong>
+      <textarea id="preview" readonly placeholder="Kết quả sẽ hiện ở đây..."></textarea>
+    </div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>
