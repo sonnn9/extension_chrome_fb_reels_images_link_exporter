@@ -44,6 +44,33 @@
       <button id="refreshBtn">Làm mới</button>
     </div>
 
+    <div class="filter-card">
+      <div class="filter-title">Bộ lọc trước khi xuất (áp dụng cho video/reels)</div>
+      <div class="grid">
+        <label>
+          <span>Lọc theo lượt xem</span>
+          <select id="viewFilter">
+            <option value="0" selected>Không lọc (xuất tất cả)</option>
+            <option value="100">Chỉ xuất video &gt; 100 view</option>
+            <option value="500">Chỉ xuất video &gt; 500 view</option>
+            <option value="1000">Chỉ xuất video &gt; 1.000 view</option>
+            <option value="5000">Chỉ xuất video &gt; 5.000 view</option>
+            <option value="10000">Chỉ xuất video &gt; 10.000 view</option>
+            <option value="100000">Chỉ xuất video &gt; 100.000 view</option>
+            <option value="custom">Tùy chỉnh…</option>
+          </select>
+        </label>
+        <label id="customViewRow" class="hidden">
+          <span>Chỉ xuất video có lượt xem lớn hơn</span>
+          <input id="minViews" type="number" min="0" step="1" value="100" />
+        </label>
+        <label class="checkbox-row">
+          <input id="includeUnknownViews" type="checkbox" />
+          <span>Giữ cả video không đọc được lượt xem</span>
+        </label>
+      </div>
+    </div>
+
     <div class="actions secondary-actions">
       <button id="exportBtn">Xuất CSV</button>
       <button id="copyBtn">Copy toàn bộ link</button>
@@ -55,6 +82,7 @@
       <div><strong>Trang:</strong> <span id="pageUrl">-</span></div>
       <div><strong>Trạng thái:</strong> <span id="scanState">-</span></div>
       <div><strong>Số link:</strong> <span id="foundCount">0</span></div>
+      <div><strong>Sau khi lọc:</strong> <span id="filteredCount">0</span></div>
       <div><strong>Số lần cuộn:</strong> <span id="scrollCount">0</span></div>
       <div><strong>Lần thêm mới gần nhất:</strong> <span id="lastAddedAt">-</span></div>
     </div>

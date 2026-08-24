@@ -4,6 +4,11 @@ const el = {
   maxScrolls: document.getElementById('maxScrolls'),
   idleRounds: document.getElementById('idleRounds'),
   clearPrevious: document.getElementById('clearPrevious'),
+  viewFilter: document.getElementById('viewFilter'),
+  customViewRow: document.getElementById('customViewRow'),
+  minViews: document.getElementById('minViews'),
+  includeUnknownViews: document.getElementById('includeUnknownViews'),
+  filteredCount: document.getElementById('filteredCount'),
   startBtn: document.getElementById('startBtn'),
   stopBtn: document.getElementById('stopBtn'),
   refreshBtn: document.getElementById('refreshBtn'),
@@ -25,21 +30,103 @@ function setHint(message, isError = false) {
   el.hint.style.color = isError ? '#b91c1c' : '#374151';
 }
 
+const FILTER_STORAGE_KEY = 'fbExporterViewFilter';
+
+function getFilter() {
+  const raw = el.viewFilter.value;
+  const minViews = raw === 'custom' ? Number(el.minViews.value || 0) : Number(raw || 0);
+  return {
+    minViews: Number.isFinite(minViews) && minViews > 0 ? Math.floor(minViews) : 0,
+    includeUnknown: el.includeUnknownViews.checked
+  };
+}
+
+function syncFilterUi() {
+  const isCustom = el.viewFilter.value === 'custom';
+  el.customViewRow.classList.toggle('hidden', !isCustom);
+  const filter = getFilter();
+  el.includeUnknownViews.disabled = filter.minViews === 0;
+}
+
+async function saveFilter() {
+  try {
+    await chrome.storage.local.set({
+      [FILTER_STORAGE_KEY]: {
+        viewFilter: el.viewFilter.value,
+        minViews: Number(el.minViews.value || 0),
+        includeUnknown: el.includeUnknownViews.checked
+      }
+    });
+  } catch {
+    // Bỏ qua nếu không lưu được cấu hình.
+  }
+}
+
+async function loadFilter() {
+  try {
+    const saved = (await chrome.storage.local.get(FILTER_STORAGE_KEY))?.[FILTER_STORAGE_KEY];
+    if (!saved) return;
+    if (saved.viewFilter) el.viewFilter.value = saved.viewFilter;
+    if (Number.isFinite(Number(saved.minViews))) el.minViews.value = String(saved.minViews);
+    el.includeUnknownViews.checked = Boolean(saved.includeUnknown);
+  } catch {
+    // Bỏ qua nếu không đọc được cấu hình.
+  }
+}
+
+function viewCountOf(row) {
+  const value = Number(row?.view_count);
+  return Number.isFinite(value) ? value : null;
+}
+
+function passesViewFilter(row, filter) {
+  if (!filter.minViews) return true;
+  // Ảnh không có lượt xem nên không bị bộ lọc video loại bỏ.
+  if ((row?.type || 'reel') === 'image') return true;
+  const views = viewCountOf(row);
+  if (views === null) return filter.includeUnknown;
+  return views > filter.minViews;
+}
+
+function filterRows(rows, filter) {
+  return (rows || []).filter((row) => passesViewFilter(row, filter));
+}
+
+function formatViews(row) {
+  const views = viewCountOf(row);
+  if (views === null) return '';
+  return views.toLocaleString('vi-VN');
+}
+
 function csvEscape(value) {
   const text = String(value ?? '');
   return `"${text.replace(/"/g, '""')}"`;
 }
 
 function toCsv(rows) {
-  const headers = ['index', 'item_url', 'item_id', 'type', 'label', 'image_url', 'collected_from', 'collected_at'];
+  const headers = [
+    'index',
+    'item_url',
+    'item_id',
+    'type',
+    'label',
+    'view_count',
+    'view_text',
+    'image_url',
+    'collected_from',
+    'collected_at'
+  ];
   const lines = [headers.map(csvEscape).join(',')];
   rows.forEach((row, index) => {
+    const views = viewCountOf(row);
     lines.push([
       index + 1,
       row.item_url ?? row.reel_url ?? '',
       row.item_id ?? row.reel_id ?? '',
       row.type ?? 'reel',
       row.label ?? '',
+      views === null ? '' : views,
+      row.view_text ?? '',
       row.image_url ?? '',
       row.collected_from ?? '',
       row.collected_at ?? ''
@@ -48,8 +135,9 @@ function toCsv(rows) {
   return '﻿' + lines.join('\n');
 }
 
-function filenameFromUrl(url, mode) {
-  const prefix = mode === 'images' ? 'fb-photos' : 'fb-reels';
+function filenameFromUrl(url, mode, minViews = 0) {
+  const base = mode === 'images' ? 'fb-photos' : 'fb-reels';
+  const prefix = minViews > 0 ? `${base}-gt${minViews}view` : base;
   try {
     const parsed = new URL(url);
     const path = parsed.pathname.replace(/\/+$/, '');
@@ -80,7 +168,7 @@ function modeLabel(mode) {
   return mode || '-';
 }
 
-function renderStatus(status) {
+function renderStatus(status, rows = null) {
   el.pageUrl.textContent = status?.url || '-';
   const stateText = status?.scanning ? 'Đang quét' : 'Đang chờ';
   const resolved = status?.resolvedMode || 'reels';
@@ -88,16 +176,33 @@ function renderStatus(status) {
     ? `Đúng trang ${modeLabel(resolved)}`
     : `Không phải trang ${modeLabel(resolved)}`;
   el.scanState.textContent = `${stateText} • ${matchFlag}`;
-  el.foundCount.textContent = String(status?.foundCount || 0);
+
+  const total = status?.foundCount || 0;
+  el.foundCount.textContent = String(total);
   el.scrollCount.textContent = String(status?.scrollCount || 0);
   el.lastAddedAt.textContent = status?.lastAddedAt || '-';
-  const previewLines = (status?.preview || []).map((item, idx) => {
+
+  const filter = getFilter();
+  let previewRows = status?.preview || [];
+  let exportable = total;
+
+  if (filter.minViews > 0) {
+    const filtered = filterRows(rows || [], filter);
+    exportable = rows ? filtered.length : 0;
+    previewRows = (rows ? filtered : []).slice(0, 20);
+    el.filteredCount.textContent = `${exportable} / ${total} (> ${filter.minViews.toLocaleString('vi-VN')} view)`;
+  } else {
+    el.filteredCount.textContent = `${total} (không lọc)`;
+  }
+
+  const previewLines = previewRows.map((item, idx) => {
     const url = item.item_url || item.reel_url || '';
-    return `${idx + 1}. ${url}`;
+    const views = formatViews(item);
+    return views ? `${idx + 1}. ${url} — ${views} view` : `${idx + 1}. ${url}`;
   });
   el.preview.value = previewLines.join('\n');
-  el.exportBtn.disabled = (status?.foundCount || 0) === 0;
-  el.copyBtn.disabled = (status?.foundCount || 0) === 0;
+  el.exportBtn.disabled = exportable === 0;
+  el.copyBtn.disabled = exportable === 0;
 }
 
 function hintForMode(status) {
@@ -116,7 +221,14 @@ async function refreshStatus(silent = false) {
   try {
     const response = await sendToActiveTab({ type: 'FB_REEL_EXPORTER_STATUS' });
     if (!response?.ok) throw new Error(response?.message || 'Không lấy được trạng thái.');
-    renderStatus(response.status);
+
+    let rows = null;
+    if (getFilter().minViews > 0 && (response.status?.foundCount || 0) > 0) {
+      const resultsResponse = await sendToActiveTab({ type: 'FB_REEL_EXPORTER_RESULTS' });
+      rows = resultsResponse?.results || [];
+    }
+
+    renderStatus(response.status, rows);
     if (!silent) setHint(hintForMode(response.status));
   } catch (error) {
     renderStatus(null);
@@ -157,9 +269,21 @@ async function exportCsv() {
   try {
     const statusResponse = await sendToActiveTab({ type: 'FB_REEL_EXPORTER_STATUS' });
     const resultsResponse = await sendToActiveTab({ type: 'FB_REEL_EXPORTER_RESULTS' });
-    const rows = resultsResponse?.results || [];
-    if (!rows.length) {
+    const allRows = resultsResponse?.results || [];
+    if (!allRows.length) {
       setHint('Chưa có dữ liệu để xuất CSV.', true);
+      return;
+    }
+
+    const filter = getFilter();
+    const rows = filterRows(allRows, filter);
+    if (!rows.length) {
+      const unknown = allRows.filter((row) => (row.type || 'reel') !== 'image' && viewCountOf(row) === null).length;
+      setHint(
+        `Không có video nào > ${filter.minViews.toLocaleString('vi-VN')} view` +
+          (unknown ? ` (${unknown} video chưa đọc được lượt xem — có thể bật tùy chọn giữ lại).` : '.'),
+        true
+      );
       return;
     }
 
@@ -170,11 +294,15 @@ async function exportCsv() {
     const mode = statusResponse?.status?.resolvedMode || 'reels';
     await chrome.downloads.download({
       url: blobUrl,
-      filename: filenameFromUrl(statusResponse?.status?.url || 'facebook', mode),
+      filename: filenameFromUrl(statusResponse?.status?.url || 'facebook', mode, filter.minViews),
       saveAs: true
     });
 
-    setHint(`Đã tạo CSV với ${rows.length} link.`);
+    setHint(
+      filter.minViews > 0
+        ? `Đã tạo CSV với ${rows.length}/${allRows.length} link (> ${filter.minViews.toLocaleString('vi-VN')} view).`
+        : `Đã tạo CSV với ${rows.length} link.`
+    );
     setTimeout(() => URL.revokeObjectURL(blobUrl), 4000);
   } catch (error) {
     setHint(error.message || String(error), true);
@@ -184,14 +312,25 @@ async function exportCsv() {
 async function copyAllLinks() {
   try {
     const resultsResponse = await sendToActiveTab({ type: 'FB_REEL_EXPORTER_RESULTS' });
-    const rows = resultsResponse?.results || [];
+    const allRows = resultsResponse?.results || [];
+    const filter = getFilter();
+    const rows = filterRows(allRows, filter);
     const text = rows.map((row) => row.item_url || row.reel_url || '').filter(Boolean).join('\n');
     if (!text) {
-      setHint('Chưa có link để copy.', true);
+      setHint(
+        filter.minViews > 0
+          ? `Không có link nào > ${filter.minViews.toLocaleString('vi-VN')} view để copy.`
+          : 'Chưa có link để copy.',
+        true
+      );
       return;
     }
     await navigator.clipboard.writeText(text);
-    setHint(`Đã copy ${rows.length} link vào clipboard.`);
+    setHint(
+      filter.minViews > 0
+        ? `Đã copy ${rows.length}/${allRows.length} link (> ${filter.minViews.toLocaleString('vi-VN')} view).`
+        : `Đã copy ${rows.length} link vào clipboard.`
+    );
   } catch (error) {
     setHint(error.message || String(error), true);
   }
@@ -221,8 +360,20 @@ el.exportBtn.addEventListener('click', exportCsv);
 el.copyBtn.addEventListener('click', copyAllLinks);
 el.mode.addEventListener('change', () => refreshStatus());
 
+async function onFilterChanged() {
+  syncFilterUi();
+  await saveFilter();
+  await refreshStatus(true);
+}
+
+el.viewFilter.addEventListener('change', onFilterChanged);
+el.minViews.addEventListener('change', onFilterChanged);
+el.includeUnknownViews.addEventListener('change', onFilterChanged);
+
 document.addEventListener('DOMContentLoaded', async () => {
   el.exportBtn.disabled = true;
   el.copyBtn.disabled = true;
+  await loadFilter();
+  syncFilterUi();
   await refreshStatus();
 });

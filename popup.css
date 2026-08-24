@@ -102,3 +102,19 @@ textarea {
   font-size: 11px;
   background: #fff;
 }
+.filter-card {
+  margin-top: 12px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 10px;
+}
+.filter-title {
+  font-size: 12px;
+  font-weight: 700;
+  margin-bottom: 8px;
+  color: #111827;
+}
+.hidden {
+  display: none;
+}

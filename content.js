@@ -175,6 +175,109 @@
     return "";
   }
 
+  const VIEW_UNIT_MULTIPLIERS = {
+    k: 1e3,
+    n: 1e3,
+    ngan: 1e3,
+    nghin: 1e3,
+    tr: 1e6,
+    m: 1e6,
+    trieu: 1e6,
+    b: 1e9,
+    t: 1e9,
+    ty: 1e9,
+    ti: 1e9
+  };
+
+  const VIEW_LABEL_RE = /(\d[\d.,\s]*)\s*(N|K|Tr|M|B|T|nghìn|ngàn|triệu|tỷ|tỉ)?\s*(?:lượt xem|lần xem|luot xem|views|view)\b/i;
+  const VIEW_STANDALONE_RE = /^(\d[\d.,]*)\s*(N|K|Tr|M|B|T)?$/i;
+
+  function unitMultiplier(unit) {
+    if (!unit) return 1;
+    const key = String(unit)
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[.\s]/g, "")
+      .toLowerCase();
+    return VIEW_UNIT_MULTIPLIERS[key] || 1;
+  }
+
+  function parseViewNumber(rawNumber, rawUnit) {
+    if (!rawNumber) return null;
+
+    const text = String(rawNumber).replace(/\s/g, "");
+    if (!/^\d[\d.,]*$/.test(text)) return null;
+
+    const multiplier = unitMultiplier(rawUnit);
+    const lastSep = Math.max(text.lastIndexOf("."), text.lastIndexOf(","));
+
+    let value;
+    if (lastSep === -1) {
+      value = Number(text);
+    } else {
+      const decimals = text.length - lastSep - 1;
+      if (decimals === 3 && multiplier === 1) {
+        // 1.234 / 1,234 -> dấu phân nhóm hàng nghìn
+        value = Number(text.replace(/[.,]/g, ""));
+      } else {
+        // 1,2 N / 1.2K -> dấu thập phân
+        value = Number(text.slice(0, lastSep).replace(/[.,]/g, "") + "." + text.slice(lastSep + 1));
+      }
+    }
+
+    if (!Number.isFinite(value)) return null;
+    return Math.round(value * multiplier);
+  }
+
+  function viewScopeNode(anchor) {
+    let node = anchor;
+    for (let i = 0; i < 4; i += 1) {
+      const parent = node.parentElement;
+      if (!parent) break;
+      const links = parent.querySelectorAll('a[href*="/reel/"], a[href*="/reels/"], a[href*="/videos/"]');
+      if (links.length > 1) break;
+      node = parent;
+    }
+    return node;
+  }
+
+  function readViewInfo(anchor) {
+    const scope = viewScopeNode(anchor);
+    const anchorText = anchor.innerText || "";
+    const scopeText = scope === anchor ? "" : (scope.innerText || "");
+
+    const labeled = [
+      anchor.getAttribute("aria-label"),
+      anchor.getAttribute("title"),
+      anchorText,
+      scopeText
+    ];
+
+    for (const raw of labeled) {
+      const text = (raw || "").trim();
+      if (!text || text.length > 800) continue;
+      const match = text.match(VIEW_LABEL_RE);
+      if (!match) continue;
+      const count = parseViewNumber(match[1], match[2]);
+      if (count !== null) return { count, text: cleanText(match[0]) };
+    }
+
+    // Lưới reels thường chỉ hiện số dạng "1,2 N" cạnh icon play, không kèm chữ "lượt xem".
+    for (const raw of [anchorText, scopeText]) {
+      const lines = (raw || "").split("\n").map((line) => line.trim()).filter(Boolean);
+      for (const line of lines) {
+        if (line.length > 12) continue;
+        const match = line.match(VIEW_STANDALONE_RE);
+        if (!match) continue;
+        const count = parseViewNumber(match[1], match[2]);
+        if (count === null || count <= 0) continue;
+        return { count, text: line };
+      }
+    }
+
+    return { count: null, text: "" };
+  }
+
   function extractImageSrc(anchor) {
     const img = anchor.querySelector("img");
     if (!img) return "";
@@ -192,19 +295,31 @@
       const normalized = normalizeReelUrl(anchor.href);
       if (!normalized) continue;
 
-      if (!state.results.has(normalized)) {
+      const existing = state.results.get(normalized);
+
+      if (!existing) {
         const url = new URL(normalized);
+        const views = readViewInfo(anchor);
         state.results.set(normalized, {
           item_url: normalized,
           item_id: reelIdFromPath(url.pathname),
           type: "reel",
           label: guessLabel(anchor),
           image_url: "",
+          view_count: views.count,
+          view_text: views.text,
           collected_from: location.href,
           collected_at: new Date().toISOString()
         });
         newCount += 1;
         state.lastAddedAt = new Date().toISOString();
+      } else if (existing.view_count === null || existing.view_count === undefined) {
+        // Số lượt xem có thể render trễ hơn thẻ link, thử đọc lại ở các vòng sau.
+        const views = readViewInfo(anchor);
+        if (views.count !== null) {
+          existing.view_count = views.count;
+          existing.view_text = views.text;
+        }
       }
     }
 
@@ -230,6 +345,8 @@
           type: "image",
           label: guessLabel(anchor),
           image_url: imageSrc,
+          view_count: null,
+          view_text: "",
           collected_from: location.href,
           collected_at: new Date().toISOString()
         });
@@ -336,6 +453,14 @@
     };
   }
 
+  function countWithViews() {
+    let total = 0;
+    for (const item of state.results.values()) {
+      if (typeof item.view_count === "number") total += 1;
+    }
+    return total;
+  }
+
   function getStatus() {
     const resolved = state.scanning ? state.resolvedMode : effectiveMode();
     return {
@@ -349,6 +474,7 @@
       scanning: state.scanning,
       stopRequested: state.stopRequested,
       foundCount: state.results.size,
+      viewCountKnown: countWithViews(),
       scrollCount: state.scrollCount,
       startedAt: state.startedAt,
       finishedAt: state.finishedAt,
